@@ -23,6 +23,8 @@ my $script_name = "check-cisco.pl";
 ###############
 # Temperature
 my $S_temp = ".1.3.6.1.4.1.9.9.13.1.3.1.3";
+my $S_temp_status = ".1.3.6.1.4.1.9.9.13.1.3.1.2";
+my $S_temp_threshold = ".1.3.6.1.4.1.9.9.13.1.3.1.4";
 # Memory
 my $S_mem_used = ".1.3.6.1.4.1.9.9.48.1.1.1.5.1"; # Byte
 my $S_mem_free = ".1.3.6.1.4.1.9.9.48.1.1.1.6.1"; # Byte
@@ -134,7 +136,7 @@ sub FSyntaxError {
 }
 
 if($#ARGV < 5 or $#ARGV > 11) {
-        FSyntaxError;
+		FSyntaxError;
 }
 
 ### Gather input from user
@@ -194,34 +196,54 @@ our $snmp_session = _create_session($switch,$community);
 if($check_type =~ /^temp/) {
 	my $temp;
 	my $R_tbl = $snmp_session->get_table($S_temp);
+	my $S_tbl = $snmp_session->get_table($S_temp_status);
+	my $TH_tbl = $snmp_session->get_table($S_temp_threshold);
 	if (!defined $R_tbl) {
 		printf "SNMP error: %s\n", $snmp_session->error();
 		exit(2);
 	}
-
+	$msg = "";
+	$perf="";
+	my $status="OK";
 	foreach my $oid ( keys %$R_tbl) {
+		my $oid_s = $oid =~ s/\.3\.1\.3/.3.1.2/r;
+		my $oid_th = $oid =~ s/\.3\.1\.3/.3.1.4/r;
+		my @lbl = split /,\s+/, $$S_tbl{$oid_s}; 
+		my $st = @lbl[1];
+		chop($st);
 		$temp = "$$R_tbl{$oid}";
-		last;
+		$msg = "$msg@lbl[0]: $$R_tbl{$oid} Celsius ($st)\n";
+		my $lbl = lc @lbl[0];
+		$lbl =~ s/\s+-\s+/ /g;
+		$lbl =~ s/\s+/_/g;
+		$perf = "$perf$lbl=$$R_tbl{$oid};$$TH_tbl{$oid_th};$$TH_tbl{$oid_th}, ";
+		if ($st eq "YELLOW") {
+			$status="WARN";
+		}
+		if($st eq "RED") {
+			$status="CRIT";
+		}
 	}
-	
 	check_oid_return($temp, $check_type);
 	
 	if($temp > 1) {
-		if($warn > $crit and "$check_type") {
-			print "Warning can't be larger then Critical: $warn > $crit\n";
-			FSyntaxError();
-		}
-		if($temp <= $warn) {
-			$stat = 0;
-			$msg = "Temperature: OK - Temperature is $temp Celsius";
-		}  elsif($temp > $warn and $temp < $crit) {
-			$stat = 1;
-			$msg = "Temperature: Warn - Temperature is $temp Celsius";
-		} elsif($temp >= $crit) {
-			$stat = 2;
-			$msg = "Temperature: CRIT - Temperature is $temp Celsius";
-		}
-		$perf = "temperature=$temp;$warn;$crit";
+		# if($warn > $crit and "$check_type") {
+		# 	print "Warning can't be larger then Critical: $warn > $crit\n";
+		# 	FSyntaxError();
+		# }
+		# if($temp <= $warn) {
+		# 	$stat = 0;
+		# 	$msg = "Temperature: OK - Temperature is $temp Celsius";
+		# }  elsif($temp > $warn and $temp < $crit) {
+		# 	$stat = 1;
+		# 	$msg = "Temperature: Warn - Temperature is $temp Celsius";
+		# } elsif($temp >= $crit) {
+		# 	$stat = 2;
+		# 	$msg = "Temperature: CRIT - Temperature is $temp Celsius";
+		# }
+		# $perf = "temperature=$temp;$warn;$crit";
+		$msg = "Temperature: $status\n".substr($msg, 0, -1);
+		$perf = substr($perf, 0, -2);
 	} else {
 		if($warn > 0 or $crit > 0) {
 			print "ERR:\nSome switches only show boolean value 0=OK 1=ERROR\nplease dont use -w and -c arguments\n\n";
